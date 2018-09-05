@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+const commander = require('commander')
+
+/**
+ * Usage.
+ */
+
+commander
+  .usage('<template-name> [project-name]')
+  .option('-c, --clone', 'use git clone')
+  .option('--offline', 'use cached template')

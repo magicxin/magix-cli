@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "description": "A vue project cli .",
   "main": "index.js",
+  "bin": {
+    "magix": "bin/magix",
+    "magic-init": "bin/magix-init"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -14,5 +18,8 @@
     "cli"
   ],
   "author": "magix",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^2.17.1"
+  }
 }
