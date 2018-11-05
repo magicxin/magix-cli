@@ -1,27 +1,45 @@
 #!/usr/bin/env node
-const commander = require('commander')
-const chalk = require('chalk')
-const fs = require('fs')
+
+const download = require('download-git-repo')
+const program = require('commander')
+const exists = require('fs').existsSync
 const path = require('path')
+const ora = require('ora')
+const home = require('user-home')
+const tildify = require('tildify')
+const chalk = require('chalk')
 const inquirer = require('inquirer')
+const rm = require('rimraf').sync
+const logger = require('../lib/logger')
+const generate = require('../lib/generate')
+const checkVersion = require('../lib/check-version')
+const warnings = require('../lib/warnings')
+const localPath = require('../lib/local-path')
+
+const isLocalPath = localPath.isLocalPath
+const getTemplatePath = localPath.getTemplatePath
+
 /**
  * Usage.
  */
 
-commander
+program
   .usage('<template-name> [project-name]')
-  .command('simple')
-  //.option('-c, --clone', 'use git clone')
-  //.option('--offline', 'use cached template')
-  
-  commander.on('--help', () => {
+  .option('-c, --clone', 'use git clone')
+  .option('--offline', 'use cached template')
+
+/**
+ * Help.
+ */
+
+program.on('--help', () => {
   console.log('  Examples:')
   console.log()
   console.log(chalk.gray('    # create a new project with an official template'))
-  console.log('    $ magix init simple <projectName>')
+  console.log('    $ magix init webpack my-project')
   console.log()
   console.log(chalk.gray('    # create a new project straight from a github template'))
-  console.log('    $ magix init username/repo <projectName')
+  console.log('    $ magix init username/repo my-project')
   console.log()
 })
 
@@ -30,65 +48,120 @@ commander
  */
 
 function help () {
-  commander.parse(process.argv)
-  if (commander.args.length < 1) return commander.help()
+  program.parse(process.argv)
+  if (program.args.length < 1) return program.help()
 }
 help()
 
-let template = commander.args[0]
-let target = commander.args[1]
+/**
+ * Settings.
+ */
+
+let template = program.args[0]
 const hasSlash = template.indexOf('/') > -1
+const rawName = program.args[1]
+const inPlace = !rawName || rawName === '.'
+const name = inPlace ? path.relative('../', process.cwd()) : rawName
+const to = path.resolve(rawName || '.')
+const clone = program.clone || false
 
-// magix init simple projectname commander.arg[0] -- simple  arg[1]  -- projectname
-// console.log(commander.args)
-// console.log(process.cwd())
-// console.log(__dirname)
-// console.log(__filename)
-// download from local
-
-if(!hasSlash) {
-  fs.exists(target, function(exists) {
-    if(exists) { // fold exist
-      inquirer.prompt([{
-        type: 'confirm',
-        message: 'Target directory exists. Continue?',
-        name: 'ok'
-      }]).then(answers => {
-        if (answers.ok) {
-          traverse(path.join(__dirname,'../' + template),target)
-        }
-      }).catch()
-    }else {
-      console.log('not exist')
-      fs.mkdirSync(target);
-      traverse(path.join(__dirname,'../' + template),target)
-  }
-  })
-}else { // download from github
-  console.log('else')
+const tmp = path.join(home, '.magix-templates', template.replace(/[\/:]/g, '-'))
+//C:\Users\Administrator\.magicxin\study
+if (program.offline) {
+  console.log(`> Use cached template at ${chalk.yellow(tildify(tmp))}`)
+  template = tmp
 }
 
-function traverse(templatePath, targetPath) {
-try {
-  const paths = fs.readdirSync(templatePath);
-  paths.forEach(_path => {
-    const _targetPath = path.resolve(targetPath, _path);
-    const _templatePath = path.resolve(templatePath, _path);
-    console.log("creating..." + _targetPath);
-    if (!fs.statSync(_templatePath).isFile()) {
-      fs.mkdirSync(_targetPath);
-      traverse(_templatePath, _targetPath);
-    } else {
-      copyFile(_targetPath, _templatePath);
+/**
+ * Padding.
+ */
+
+console.log()
+process.on('exit', () => {
+  console.log()
+})
+
+if (inPlace || exists(to)) {
+  inquirer.prompt([{
+    type: 'confirm',
+    message: inPlace
+      ? 'Generate project in current directory?'
+      : 'Target directory exists. Continue?',
+    name: 'ok'
+  }]).then(answers => {
+    if (answers.ok) {
+      run()
     }
-  });
-} catch (error) {
-  console.log(error);
-  return false;
-}
-return true;
+  }).catch(logger.fatal)
+} else {
+  run()
 }
 
-function copyFile(_targetPath, _templatePath) {
-  fs.writeFileSync(_targetPath, fs.readFileSync(_templatePath));
+/**
+ * Check, download and generate the project.
+ */
+
+function run () {
+  // check if template is local
+  if (isLocalPath(template)) {
+    console.log('location')
+    const templatePath = getTemplatePath(template)
+    if (exists(templatePath)) {
+      generate(name, templatePath, to, err => {
+        if (err) logger.fatal(err)
+        console.log()
+        logger.success('Generated "%s".', name)
+      })
+    } else {
+      logger.fatal('Local template "%s" not found.', template)
+    }
+  } else {
+    console.log('online')
+    checkVersion(() => {
+      if (!hasSlash) {
+        console.log('hasSlash',hasSlash)
+        // use official templates
+        const officialTemplate = 'magix-templates/' + template
+        if (template.indexOf('#') !== -1) {
+          downloadAndGenerate(officialTemplate)
+        } else {
+          if (template.indexOf('-2.0') !== -1) {
+            warnings.v2SuffixTemplatesDeprecated(template, inPlace ? '' : name)
+            return
+          }
+
+          // warnings.v2BranchIsNowDefault(template, inPlace ? '' : name)
+          downloadAndGenerate(officialTemplate)
+        }
+      } else {
+        console.log('not hasSlash',hasSlash)
+        downloadAndGenerate(template)
+      }
+    })
+  }
+}
+
+/**
+ * Download a generate from a template repo.
+ *
+ * @param {String} template
+ */
+
+function downloadAndGenerate (template) {
+  console.log(template)
+  console.log(tmp)
+  const spinner = ora('downloading template')
+  spinner.start()
+  // Remove if local template exists
+  if (exists(tmp)) rm(tmp)
+  download(template, tmp, { clone }, err => {
+    spinner.stop()
+    if (err) logger.fatal('Failed to download repo ' + template + ': ' + err.message.trim())
+    // name a ==> folder name
+    generate(name, tmp, to, err => {
+      if (err) logger.fatal(err)
+      console.log()
+      logger.success('Generated "%s".', name)
+    })
+  })
 }
